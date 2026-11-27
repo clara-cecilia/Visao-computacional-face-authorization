@@ -1,0 +1,7 @@
+# Interface e processamento de imagens
+customtkinter>=5.2,<6
+Pillow>=10,<12
+numpy==1.26.4
+opencv-contrib-python==4.11.0.86
+mediapipe==0.10.21
+matplotlib
