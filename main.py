@@ -1,161 +1,81 @@
+from pathlib import Path
 
 import cv2
 import face_recognition
-import os
 
-# Pasta com as imagens cadastradas
-PASTA_ROSTOS = "rostos"
+from abrir_terminal import abrir_terminal
 
-# Listas para armazenar os rostos conhecidos
-rostos_conhecidos = []
-nomes_conhecidos = []
 
-# =====================================
-# 1. CARREGAR ROSTOS CADASTRADOS
-# =====================================
+PASTA_ROSTOS = Path(__file__).resolve().parent / "rostos"
 
-for arquivo in os.listdir(PASTA_ROSTOS):
 
-    caminho = os.path.join(PASTA_ROSTOS, arquivo)
+def corrigir_nome(nome):
+    """Recupera acentos de arquivos antigos gravados com codificação incorreta."""
+    if "Ã" not in nome and "Â" not in nome:
+        return nome
+    try:
+        return nome.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return nome
 
-    if arquivo.lower().endswith((".jpg", ".jpeg", ".png")):
 
-        imagem = face_recognition.load_image_file(caminho)
+def carregar_rostos():
+    """Carrega as fotos cadastradas e suas codificações faciais."""
+    PASTA_ROSTOS.mkdir(exist_ok=True)
+    rostos_conhecidos = []
+    nomes_conhecidos = []
 
+    for arquivo in sorted(PASTA_ROSTOS.iterdir()):
+        if arquivo.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+            continue
+        imagem = face_recognition.load_image_file(str(arquivo))
         codificacoes = face_recognition.face_encodings(imagem)
-
-        if len(codificacoes) > 0:
-
+        if len(codificacoes) == 1:
             rostos_conhecidos.append(codificacoes[0])
-
-            nome = os.path.splitext(arquivo)[0]
+            nome = corrigir_nome(arquivo.stem)
             nomes_conhecidos.append(nome)
-
             print(f"Rosto cadastrado: {nome}")
-
         else:
-            print(f"Nenhum rosto encontrado em: {arquivo}")
+            print(f"Foto ignorada (esperado um rosto): {arquivo.name}")
+
+    return rostos_conhecidos, nomes_conhecidos
 
 
-if not rostos_conhecidos:
-    raise RuntimeError("Nenhum rosto válido foi cadastrado na pasta rostos.")
+def reconhecer_rosto(frame, rostos_conhecidos, nomes_conhecidos):
+    """Retorna a posição do rosto, nome e resultado para o design."""
+    pequeno = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+    rgb = cv2.cvtColor(pequeno, cv2.COLOR_BGR2RGB)
+    localizacoes = face_recognition.face_locations(rgb)
+
+    # O terminal atende uma pessoa por vez.
+    if len(localizacoes) != 1:
+        return None, None, None
+
+    topo, direita, baixo, esquerda = localizacoes[0]
+    escala_x = frame.shape[1] / pequeno.shape[1]
+    escala_y = frame.shape[0] / pequeno.shape[0]
+    posicao = (round(esquerda * escala_x), round(topo * escala_y),
+               round((direita - esquerda) * escala_x),
+               round((baixo - topo) * escala_y))
+
+    codificacoes = face_recognition.face_encodings(rgb, localizacoes)
+    if not codificacoes:
+        return posicao, None, None
+    if not rostos_conhecidos:
+        return posicao, None, False
+
+    distancias = face_recognition.face_distance(rostos_conhecidos, codificacoes[0])
+    melhor_indice = distancias.argmin()
+    if distancias[melhor_indice] <= 0.50:
+        return posicao, nomes_conhecidos[melhor_indice], True
+
+    return posicao, None, False
 
 
-# =====================================
-# 2. INICIAR A WEBCAM
-# =====================================
-
-camera = cv2.VideoCapture(0)
-
-if not camera.isOpened():
-    raise RuntimeError("Não foi possível acessar a webcam.")
-
-print("Reconhecimento facial iniciado!")
-print("Pressione Q para encerrar.")
+def main():
+    rostos, nomes = carregar_rostos()
+    abrir_terminal(lambda frame: reconhecer_rosto(frame, rostos, nomes))
 
 
-# =====================================
-# 3. PROCESSAR OS FRAMES
-# =====================================
-
-while True:
-
-    sucesso, frame = camera.read()
-
-    if not sucesso:
-        print("Erro ao capturar imagem.")
-        break
-
-    # Reduzir tamanho para melhorar desempenho
-    frame_pequeno = cv2.resize(
-        frame,
-        (0, 0),
-        fx=0.25,
-        fy=0.25
-    )
-
-    # OpenCV utiliza BGR, face_recognition utiliza RGB
-    frame_rgb = cv2.cvtColor(
-        frame_pequeno,
-        cv2.COLOR_BGR2RGB
-    )
-
-    # Detectar rostos
-    localizacoes = face_recognition.face_locations(frame_rgb)
-
-    # Gerar codificações faciais
-    codificacoes = face_recognition.face_encodings(
-        frame_rgb,
-        localizacoes
-    )
-
-    # =================================
-    # 4. COMPARAR OS ROSTOS
-    # =================================
-
-    for codificacao, localizacao in zip(
-        codificacoes,
-        localizacoes
-    ):
-
-        distancias = face_recognition.face_distance(
-            rostos_conhecidos,
-            codificacao
-        )
-
-        melhor_indice = distancias.argmin()
-
-        if distancias[melhor_indice] <= 0.50:
-            nome = nomes_conhecidos[melhor_indice]
-        else:
-            nome = "Desconhecido"
-
-        # Recuperar coordenadas do rosto
-        topo, direita, baixo, esquerda = localizacao
-
-        # Como reduzimos o frame para 25%,
-        # precisamos multiplicar as coordenadas por 4
-        topo *= 4
-        direita *= 4
-        baixo *= 4
-        esquerda *= 4
-
-        # Desenhar retângulo
-        cv2.rectangle(
-            frame,
-            (esquerda, topo),
-            (direita, baixo),
-            (0, 255, 0),
-            2
-        )
-
-        # Exibir nome
-        cv2.putText(
-            frame,
-            nome,
-            (esquerda, topo - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 0),
-            2
-        )
-
-    # Exibir imagem
-    cv2.imshow(
-        "Sistema de Reconhecimento Facial",
-        frame
-    )
-
-    # Encerrar com Q
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
-
-
-# =====================================
-# 5. FINALIZAR
-# =====================================
-
-camera.release()
-cv2.destroyAllWindows()
-
-print("Sistema encerrado.")
+if __name__ == "__main__":
+    main()
